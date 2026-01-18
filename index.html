@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Mystery GM (PDF対応版)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <style>
+        #chat-log { height: 400px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        .user { color: blue; } .ai { color: green; }
+    </style>
+</head>
+<body>
+    <h1>AIマダミスGMシステム (PDF対応)</h1>
+    
+    <input type="file" id="fileInput" multiple accept=".txt,.md,.pdf">
+    <button onclick="initGame()">ゲーム開始</button>
+    <p id="status"></p>
+
+    <div id="chat-log"></div>
+    
+    <select id="targetChar"></select>
+    <input type="text" id="userInput" placeholder="メッセージを入力..." style="width: 70%;">
+    <button onclick="sendChat()">送信</button>
+
+    <script>
+        // PDF.jsのワーカー設定
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+        let gameContext = "";
+        let chatHistory = [];
+        let turnCounts = {};
+
+        // PDFからテキストを抽出する関数
+        async function extractTextFromPDF(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let fullText = "";
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+                fullText += content.items.map(item => item.str).join("");
+            }
+            return fullText;
+        }
+
+        async function initGame() {
+            const files = document.getElementById('fileInput').files;
+            if (files.length === 0) return;
+            
+            document.getElementById('status').innerText = "読み込み中...";
+            let combinedText = "";
+            const selectBox = document.getElementById('targetChar');
+            selectBox.innerHTML = ""; // 初期化
+
+            for (let file of files) {
+                let text = "";
+                // ファイル形式で処理を分ける
+                if (file.type === "application/pdf") {
+                    text = await extractTextFromPDF(file);
+                } else {
+                    text = await file.text();
+                }
+
+                combinedText += `\n--- ファイル名: ${file.name} ---\n${text}\n`;
+                
+                const name = file.name.replace(/\.[^/.]+$/, ""); // 拡張子を除去
+                const opt = document.createElement('option');
+                opt.value = name; opt.textContent = name;
+                selectBox.appendChild(opt);
+            }
+            
+            gameContext = combinedText;
+            document.getElementById('status').innerText = "準備完了！";
+        }
+
+        async function sendChat() {
+            const charName = document.getElementById('targetChar').value;
+            const userMsg = document.getElementById('userInput').value;
+            if (!userMsg || !gameContext) return;
+
+            turnCounts[charName] = (turnCounts[charName] || 0) + 1;
+            
+            let systemTrigger = "";
+            if (turnCounts[charName] === 2) {
+                systemTrigger = `\n(システム指示: ${charName}との2回目の会話です。ルール通り「そういえば」でレベル1の情報またはノイズを出してください)`;
+            }
+
+            const log = document.getElementById('chat-log');
+            log.innerHTML += `<p class="user"><b>あなた (${charName}へ):</b> ${userMsg}</p>`;
+
+            try {
+                const response = await fetch('/.netlify/functions/gemini-gm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        context: gameContext,
+                        message: userMsg + systemTrigger,
+                        history: chatHistory
+                    })
+                });
+                
+                const data = await response.json();
+                log.innerHTML += `<p class="ai"><b>${charName}:</b> ${data.reply}</p>`;
+                
+                chatHistory.push({ role: "user", parts: [{ text: userMsg }] });
+                chatHistory.push({ role: "model", parts: [{ text: data.reply }] });
+                document.getElementById('userInput').value = "";
+                log.scrollTop = log.scrollHeight;
+            } catch (error) {
+                console.error("Error:", error);
+                alert("送信に失敗しました。");
+            }
+        }
+    </script>
+</body>
+</html>
