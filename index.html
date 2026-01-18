@@ -2,35 +2,114 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>AI Mystery GM (PDF対応版)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Mystery GM - Local Tester</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/generative-ai": "https://esm.run/@google/generative-ai"
+        }
+      }
+    </script>
     <style>
-        #chat-log { height: 400px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
-        .user { color: blue; } .ai { color: green; }
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f4f4f9; }
+        .config-section { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        #chat-log { height: 400px; overflow-y: scroll; border: 1px solid #ccc; background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
+        .user { color: #2c3e50; background: #ecf0f1; padding: 8px; border-radius: 5px; margin: 5px 0; }
+        .ai { color: #27ae60; background: #f9f9f9; padding: 8px; border-radius: 5px; border-left: 4px solid #27ae60; margin: 5px 0; }
+        .system-msg { color: #7f8c8d; font-size: 0.8em; text-align: center; margin: 10px 0; }
+        .controls { display: flex; gap: 10px; }
+        input[type="text"], input[type="password"] { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; cursor: pointer; background: #3498db; color: white; border: none; border-radius: 4px; }
+        button:disabled { background: #bdc3c7; }
     </style>
 </head>
 <body>
-    <h1>AIマダミスGMシステム (PDF対応)</h1>
-    
-    <input type="file" id="fileInput" multiple accept=".txt,.md,.pdf">
-    <button onclick="initGame()">ゲーム開始</button>
-    <p id="status"></p>
+
+    <h1>AI Mystery GM 開発テスト用</h1>
+
+    <div class="config-section">
+        <h3>1. 設定</h3>
+        <label>Gemini API Key: </label>
+        <input type="password" id="apiKey" placeholder="AIZA..."><br><br>
+        <label>キャラクターシート (PDF/TXT): </label>
+        <input type="file" id="fileInput" multiple accept=".txt,.md,.pdf">
+        <button onclick="initGame()" id="initBtn">ゲーム初期化</button>
+        <p id="status">APIキーを入力して、ファイルを読み込んでください。</p>
+    </div>
 
     <div id="chat-log"></div>
     
-    <select id="targetChar"></select>
-    <input type="text" id="userInput" placeholder="メッセージを入力..." style="width: 70%;">
-    <button onclick="sendChat()">送信</button>
+    <div class="controls">
+        <select id="targetChar"></select>
+        <input type="text" id="userInput" placeholder="メッセージを入力...">
+        <button onclick="sendChat()" id="sendBtn" disabled>送信</button>
+    </div>
 
-    <script>
-        // PDF.jsのワーカー設定
+    <script type="module">
+        import { GoogleGenerativeAI } from "@google/generative-ai";
+
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
         let gameContext = "";
         let chatHistory = [];
         let turnCounts = {};
+        let model;
 
-        // PDFからテキストを抽出する関数
+        window.initGame = async () => {
+            const key = document.getElementById('apiKey').value;
+            if (!key) return alert("APIキーを入力してください。");
+
+            const files = document.getElementById('fileInput').files;
+            if (files.length === 0) return alert("ファイルをアップロードしてください。");
+
+            document.getElementById('status').innerText = "読み込み中...";
+            
+            try {
+                const genAI = new GoogleGenerativeAI(key);
+                let combinedText = "";
+                const selectBox = document.getElementById('targetChar');
+                selectBox.innerHTML = "";
+
+                for (let file of files) {
+                    let text = "";
+                    if (file.type === "application/pdf") {
+                        text = await extractTextFromPDF(file);
+                    } else {
+                        text = await file.text();
+                    }
+                    combinedText += `\n--- ファイル名: ${file.name} ---\n${text}\n`;
+                    
+                    const name = file.name.replace(/\.[^/.]+$/, "");
+                    const opt = document.createElement('option');
+                    opt.value = name; opt.textContent = name;
+                    selectBox.appendChild(opt);
+                }
+
+                gameContext = combinedText;
+
+                // モデルの初期化
+                model = genAI.getGenerativeModel({ 
+                    model: "gemini-1.5-pro",
+                    systemInstruction: `あなたはマーダーミステリーのGMです。以下の資料を読み込み、全キャラを演じてください。
+                    資料: ${gameContext}
+                    【必須ルール】
+                    1. 2回目の会話では「そういえば…」と切り出し、資料内の「レベル1の情報」または「ノイズ情報」を出してください。
+                    2. 全キャラのうち、1名だけをランダムで「ノイズ担当」に選び、無意味な情報を重要そうに出してください。
+                    3. 情報を出す際は「大したことじゃないですが」と前置きし、重要性を否定してください。`
+                });
+
+                document.getElementById('status').innerText = "準備完了！";
+                document.getElementById('sendBtn').disabled = false;
+                document.getElementById('chat-log').innerHTML += `<div class="system-msg">システム：ゲームが開始されました。</div>`;
+                
+            } catch (e) {
+                alert("初期化に失敗しました。APIキーを確認してください。");
+                console.error(e);
+            }
+        };
+
         async function extractTextFromPDF(file) {
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -43,74 +122,39 @@
             return fullText;
         }
 
-        async function initGame() {
-            const files = document.getElementById('fileInput').files;
-            if (files.length === 0) return;
-            
-            document.getElementById('status').innerText = "読み込み中...";
-            let combinedText = "";
-            const selectBox = document.getElementById('targetChar');
-            selectBox.innerHTML = ""; // 初期化
-
-            for (let file of files) {
-                let text = "";
-                // ファイル形式で処理を分ける
-                if (file.type === "application/pdf") {
-                    text = await extractTextFromPDF(file);
-                } else {
-                    text = await file.text();
-                }
-
-                combinedText += `\n--- ファイル名: ${file.name} ---\n${text}\n`;
-                
-                const name = file.name.replace(/\.[^/.]+$/, ""); // 拡張子を除去
-                const opt = document.createElement('option');
-                opt.value = name; opt.textContent = name;
-                selectBox.appendChild(opt);
-            }
-            
-            gameContext = combinedText;
-            document.getElementById('status').innerText = "準備完了！";
-        }
-
-        async function sendChat() {
+        window.sendChat = async () => {
             const charName = document.getElementById('targetChar').value;
             const userMsg = document.getElementById('userInput').value;
-            if (!userMsg || !gameContext) return;
+            if (!userMsg || !model) return;
 
             turnCounts[charName] = (turnCounts[charName] || 0) + 1;
             
             let systemTrigger = "";
             if (turnCounts[charName] === 2) {
-                systemTrigger = `\n(システム指示: ${charName}との2回目の会話です。ルール通り「そういえば」でレベル1の情報またはノイズを出してください)`;
+                systemTrigger = `\n(システム指示: ${charName}との2回目の会話です。ルール通り「そういえば」で情報を出してください)`;
             }
 
             const log = document.getElementById('chat-log');
-            log.innerHTML += `<p class="user"><b>あなた (${charName}へ):</b> ${userMsg}</p>`;
+            log.innerHTML += `<div class="user"><b>あなた (${charName}へ):</b> ${userMsg}</div>`;
 
             try {
-                const response = await fetch('/.netlify/functions/gemini-gm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        context: gameContext,
-                        message: userMsg + systemTrigger,
-                        history: chatHistory
-                    })
-                });
-                
-                const data = await response.json();
-                log.innerHTML += `<p class="ai"><b>${charName}:</b> ${data.reply}</p>`;
+                // セッションの開始または継続
+                const chat = model.startChat({ history: chatHistory });
+                const result = await chat.sendMessage(userMsg + systemTrigger);
+                const replyText = result.response.text();
+
+                log.innerHTML += `<div class="ai"><b>${charName}:</b> ${replyText}</div>`;
                 
                 chatHistory.push({ role: "user", parts: [{ text: userMsg }] });
-                chatHistory.push({ role: "model", parts: [{ text: data.reply }] });
+                chatHistory.push({ role: "model", parts: [{ text: replyText }] });
+                
                 document.getElementById('userInput').value = "";
                 log.scrollTop = log.scrollHeight;
             } catch (error) {
                 console.error("Error:", error);
-                alert("送信に失敗しました。");
+                alert("APIエラーが発生しました。詳細はコンソールを確認してください。");
             }
-        }
+        };
     </script>
 </body>
 </html>
